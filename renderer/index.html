@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prompt Manager</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body data-theme="dark">
+    <div id="appShell" class="app-shell">
+      <aside id="sidebar" class="sidebar">
+        <div class="brand-card">
+          <p class="eyebrow">Prompt Builder</p>
+          <h1>Prompt Manager</h1>
+          <p class="muted">Reusable prompts, system instructions, code imports, Git sync, and backups in one desktop app.</p>
+        </div>
+
+        <section class="sidebar-card">
+          <div class="section-head">
+            <h2>Saved Prompts</h2>
+            <button id="newPromptBtn" class="ghost-button">New</button>
+          </div>
+          <input id="searchInput" class="search-input" type="search" placeholder="Search prompts" />
+          <div id="savedPromptList" class="saved-list"></div>
+        </section>
+
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div class="topbar-main">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2>Prompt Composer</h2>
+            </div>
+            <div class="topbar-actions">
+              <button id="toggleSidebarBtn" class="ghost-button">Hide Sidebar</button>
+              <button id="themeToggleBtn" class="ghost-button">Light Theme</button>
+              <button id="refreshAllBtn" class="action-button">Refresh All</button>
+              <button id="pullAllBtn" class="ghost-button">Pull All Git</button>
+              <button id="settingsBtn" class="ghost-button">Settings</button>
+            </div>
+          </div>
+
+          <div class="meta-grid">
+            <label class="field">
+              <span>Prompt Name</span>
+              <input id="promptName" type="text" placeholder="Example: Truck App Debug" />
+            </label>
+            <label class="field">
+              <span>Tags</span>
+              <input id="promptTags" type="text" placeholder="backend, website, android" />
+            </label>
+            <label class="field field-wide">
+              <span>Notes</span>
+              <textarea id="promptNotes" rows="2" placeholder="Optional notes about this prompt"></textarea>
+            </label>
+          </div>
+        </header>
+
+        <section class="workspace-grid">
+          <div class="composer-column">
+            <section class="panel">
+              <div class="panel-head">
+                <label class="toggle-row">
+                  <input id="instructionsEnabled" type="checkbox" checked />
+                  <span>Instructions</span>
+                </label>
+                <div class="template-row">
+                  <label for="templateSelect">Template</label>
+                  <select id="templateSelect">
+                    <option value="">Choose template</option>
+                  </select>
+                </div>
+              </div>
+              <div class="compact-actions space-bottom">
+                <input id="templateNameInput" type="text" class="inline-input" placeholder="Template name" />
+                <button id="saveTemplateBtn" class="action-button">Save As Template</button>
+                <button id="deleteTemplateBtn" class="ghost-button danger">Delete Selected Template</button>
+              </div>
+              <textarea id="instructionsText" class="editor instructions-editor" placeholder="Write instructions for the AI here"></textarea>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <label class="toggle-row">
+                  <input id="systemInstructionsEnabled" type="checkbox" checked />
+                  <span>System Instructions</span>
+                </label>
+                <div class="compact-actions">
+                  <button id="loadSystemInstructionBtn" type="button" class="ghost-button">Load Selected</button>
+                  <button id="saveSystemInstructionBtnMain" type="button" class="action-button">Save Current</button>
+                </div>
+              </div>
+              <div class="compact-actions space-bottom">
+                <input id="systemInstructionNameInput" type="text" class="inline-input" placeholder="System instruction name" />
+                <select id="systemInstructionSelectMain">
+                  <option value="">Choose saved system instruction</option>
+                </select>
+                <button id="attachSystemInstructionBtnMain" type="button" class="action-button">Attach To Prompt</button>
+                <button id="deleteSystemInstructionBtnMain" type="button" class="ghost-button danger">Delete Selected</button>
+              </div>
+              <textarea id="systemInstructionsText" class="editor instructions-editor" placeholder="Write or load system instructions here"></textarea>
+              <div id="attachedSystemInstructionsMain" class="source-list compact-list"></div>
+            </section>
+
+            <section id="backendPanel" class="panel section-panel">
+              <div class="panel-head">
+                <div>
+                  <label class="toggle-row">
+                    <input id="backendEnabled" type="checkbox" checked />
+                    <span>Backend</span>
+                  </label>
+                  <p class="panel-subtitle">Python services, APIs, jobs, database code, server scripts.</p>
+                </div>
+                <div class="action-row">
+                  <button type="button" data-section="backend" data-action="folder" class="action-button">Add Folder</button>
+                  <button type="button" data-section="backend" data-action="subfolder" class="ghost-button">Add Subfolder</button>
+                  <button type="button" data-section="backend" data-action="files" class="ghost-button">Add Files</button>
+                  <button type="button" data-section="backend" data-action="git-link" class="ghost-button">GitHub Link</button>
+                  <button type="button" data-section="backend" data-action="refresh" class="ghost-button">Refresh</button>
+                  <button type="button" data-section="backend" data-action="git" class="ghost-button">Git Pull</button>
+                  <button type="button" data-section="backend" data-action="clear" class="ghost-button danger">Clear</button>
+                </div>
+              </div>
+              <div id="backendDropZone" class="drop-zone">Drop backend files or folders here</div>
+              <div id="backendSources" class="source-list"></div>
+              <div class="section-meta">
+                <div id="backendStats" class="stats-inline"></div>
+                <div id="backendGitLabel" class="muted small-text"></div>
+              </div>
+              <div id="backendTree" class="tree-box"></div>
+              <pre id="backendGitLog" class="log-box"></pre>
+            </section>
+
+            <section id="websitePanel" class="panel section-panel">
+              <div class="panel-head">
+                <div>
+                  <label class="toggle-row">
+                    <input id="websiteEnabled" type="checkbox" checked />
+                    <span>Website</span>
+                  </label>
+                  <p class="panel-subtitle">HTML, CSS, JavaScript, TypeScript, templates, frontend assets.</p>
+                </div>
+                <div class="action-row">
+                  <button type="button" data-section="website" data-action="folder" class="action-button">Add Folder</button>
+                  <button type="button" data-section="website" data-action="subfolder" class="ghost-button">Add Subfolder</button>
+                  <button type="button" data-section="website" data-action="files" class="ghost-button">Add Files</button>
+                  <button type="button" data-section="website" data-action="git-link" class="ghost-button">GitHub Link</button>
+                  <button type="button" data-section="website" data-action="refresh" class="ghost-button">Refresh</button>
+                  <button type="button" data-section="website" data-action="git" class="ghost-button">Git Pull</button>
+                  <button type="button" data-section="website" data-action="clear" class="ghost-button danger">Clear</button>
+                </div>
+              </div>
+              <div id="websiteDropZone" class="drop-zone">Drop website files or folders here</div>
+              <div id="websiteSources" class="source-list"></div>
+              <div class="section-meta">
+                <div id="websiteStats" class="stats-inline"></div>
+                <div id="websiteGitLabel" class="muted small-text"></div>
+              </div>
+              <div id="websiteTree" class="tree-box"></div>
+              <pre id="websiteGitLog" class="log-box"></pre>
+            </section>
+
+            <section id="androidPanel" class="panel section-panel">
+              <div class="panel-head">
+                <div>
+                  <label class="toggle-row">
+                    <input id="androidEnabled" type="checkbox" checked />
+                    <span>Android</span>
+                  </label>
+                  <p class="panel-subtitle">Kotlin, Java, XML layouts, Gradle, manifests, properties, resources.</p>
+                </div>
+                <div class="action-row">
+                  <button type="button" data-section="android" data-action="folder" class="action-button">Add Folder</button>
+                  <button type="button" data-section="android" data-action="subfolder" class="ghost-button">Add Subfolder</button>
+                  <button type="button" data-section="android" data-action="files" class="ghost-button">Add Files</button>
+                  <button type="button" data-section="android" data-action="git-link" class="ghost-button">GitHub Link</button>
+                  <button type="button" data-section="android" data-action="refresh" class="ghost-button">Refresh</button>
+                  <button type="button" data-section="android" data-action="git" class="ghost-button">Git Pull</button>
+                  <button type="button" data-section="android" data-action="clear" class="ghost-button danger">Clear</button>
+                </div>
+              </div>
+              <div id="androidDropZone" class="drop-zone">Drop Android files or folders here</div>
+              <div id="androidSources" class="source-list"></div>
+              <div class="section-meta">
+                <div id="androidStats" class="stats-inline"></div>
+                <div id="androidGitLabel" class="muted small-text"></div>
+              </div>
+              <div id="androidTree" class="tree-box"></div>
+              <pre id="androidGitLog" class="log-box"></pre>
+            </section>
+          </div>
+
+          <aside class="preview-column">
+            <section class="panel sticky-panel">
+              <div class="stats-row">
+                <div class="stat-card">
+                  <span class="stat-label">Characters</span>
+                  <strong id="charCount">0</strong>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Words</span>
+                  <strong id="wordCount">0</strong>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Estimated Tokens</span>
+                  <strong id="tokenCount">0</strong>
+                </div>
+              </div>
+
+              <div class="preview-actions">
+                <button id="buildBtn" class="primary-button">Build Preview</button>
+                <button id="copyBtn" class="ghost-button">Copy Prompt</button>
+                <button id="saveBtn" class="primary-button accent">Save Prompt</button>
+                <button id="deleteBtn" class="ghost-button danger">Delete Prompt</button>
+              </div>
+
+              <textarea id="promptPreview" class="editor prompt-preview" readonly placeholder="Prompt preview will appear here"></textarea>
+              <div id="statusBar" class="status-bar">Ready.</div>
+            </section>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <div id="settingsModal" class="modal hidden">
+      <div class="modal-backdrop" data-close-settings="true"></div>
+      <div class="modal-card">
+        <div class="section-head">
+          <h2>Settings</h2>
+          <button id="closeSettingsBtn" class="ghost-button">Close</button>
+        </div>
+
+        <div class="settings-grid">
+          <div class="settings-block">
+            <h3>Export Folder</h3>
+            <p id="storageText" class="muted"></p>
+            <div class="storage-actions">
+              <button id="chooseExportBtn" class="action-button">Change Export Folder</button>
+              <button id="resetExportBtn" class="ghost-button">Reset Default</button>
+            </div>
+          </div>
+
+          <div class="settings-block">
+            <h3>Behavior</h3>
+            <label class="check-row">
+              <input id="autoRefreshToggle" type="checkbox" />
+              <span>Auto refresh preview after source changes</span>
+            </label>
+            <label class="check-row">
+              <input id="autoPullToggle" type="checkbox" />
+              <span>Auto pull Git before building preview</span>
+            </label>
+          </div>
+
+          <div class="settings-block">
+            <h3>Backup And Restore</h3>
+            <p id="backupStatusText" class="muted"></p>
+            <p id="backupFolderText" class="muted"></p>
+            <div class="storage-actions">
+              <button id="chooseBackupBtn" class="action-button">Change Backup Folder</button>
+              <button id="resetBackupBtn" class="ghost-button">Reset Backup Folder</button>
+              <button id="backupNowBtn" class="action-button">Backup Now</button>
+              <button id="restoreBackupBtn" class="ghost-button">Restore Backup</button>
+            </div>
+          </div>
+
+          <div class="settings-block">
+            <h3>File Types</h3>
+            <p class="muted">Choose which file types each section should import while scanning folders.</p>
+            <div id="fileTypeSettings" class="file-type-settings"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

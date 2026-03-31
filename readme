@@ -1,0 +1,16 @@
+Prompt Manager
+
+Electron desktop app for building AI prompts from:
+- Instructions
+- Backend / website code
+- Android app code
+
+Run:
+1. npm install
+2. npm start
+
+Key behavior:
+- Add files, folders, or subfolders to Backend / Website and Android sections.
+- Saved prompts keep source paths, so reopening a prompt reloads the latest files from disk.
+- If a selected source is inside a Git repository, use Pull Git to run git pull before rebuilding the prompt.
+- Prompt exports are written to your Documents\PromptManager folder.
