@@ -25,6 +25,15 @@
           <div id="savedPromptList" class="saved-list"></div>
         </section>
 
+        <section class="sidebar-card">
+          <div class="section-head">
+            <h2>Browser Inbox</h2>
+            <button id="refreshBrowserCapturesBtn" class="ghost-button">Refresh</button>
+          </div>
+          <p class="muted">Captured prompts from Gemini or AI Studio will appear here.</p>
+          <div id="browserCaptureList" class="saved-list"></div>
+        </section>
+
       </aside>
 
       <main class="main-panel">
@@ -129,6 +138,10 @@
               <div class="section-meta">
                 <div id="backendStats" class="stats-inline"></div>
                 <div id="backendGitLabel" class="muted small-text"></div>
+                <div class="compact-actions">
+                  <button type="button" data-tree-section="backend" data-tree-action="expand" class="ghost-button">Expand All</button>
+                  <button type="button" data-tree-section="backend" data-tree-action="collapse" class="ghost-button">Collapse All</button>
+                </div>
               </div>
               <div id="backendTree" class="tree-box"></div>
               <pre id="backendGitLog" class="log-box"></pre>
@@ -158,6 +171,10 @@
               <div class="section-meta">
                 <div id="websiteStats" class="stats-inline"></div>
                 <div id="websiteGitLabel" class="muted small-text"></div>
+                <div class="compact-actions">
+                  <button type="button" data-tree-section="website" data-tree-action="expand" class="ghost-button">Expand All</button>
+                  <button type="button" data-tree-section="website" data-tree-action="collapse" class="ghost-button">Collapse All</button>
+                </div>
               </div>
               <div id="websiteTree" class="tree-box"></div>
               <pre id="websiteGitLog" class="log-box"></pre>
@@ -187,6 +204,10 @@
               <div class="section-meta">
                 <div id="androidStats" class="stats-inline"></div>
                 <div id="androidGitLabel" class="muted small-text"></div>
+                <div class="compact-actions">
+                  <button type="button" data-tree-section="android" data-tree-action="expand" class="ghost-button">Expand All</button>
+                  <button type="button" data-tree-section="android" data-tree-action="collapse" class="ghost-button">Collapse All</button>
+                </div>
               </div>
               <div id="androidTree" class="tree-box"></div>
               <pre id="androidGitLog" class="log-box"></pre>
@@ -213,6 +234,7 @@
               <div class="preview-actions">
                 <button id="buildBtn" class="primary-button">Build Preview</button>
                 <button id="copyBtn" class="ghost-button">Copy Prompt</button>
+                <button id="duplicateBtn" class="ghost-button">Duplicate Prompt</button>
                 <button id="saveBtn" class="primary-button accent">Save Prompt</button>
                 <button id="deleteBtn" class="ghost-button danger">Delete Prompt</button>
               </div>
@@ -268,11 +290,55 @@
           </div>
 
           <div class="settings-block">
+            <h3>Browser Integration</h3>
+            <label class="check-row">
+              <input id="browserBridgeEnabled" type="checkbox" />
+              <span>Enable local browser bridge for Chrome extension</span>
+            </label>
+            <label class="field">
+              <span>Bridge Port</span>
+              <input id="browserBridgePort" type="number" min="1024" max="65535" placeholder="32123" />
+            </label>
+            <p id="browserBridgeText" class="muted"></p>
+            <p id="browserExtensionPathText" class="muted"></p>
+            <div class="storage-actions">
+              <button id="saveBrowserBridgeBtn" class="action-button">Save Browser Settings</button>
+              <button id="openExtensionFolderBtn" class="ghost-button">Open Extension Folder</button>
+              <button id="openDebugConsoleBtn" class="ghost-button">Open Debug Console</button>
+            </div>
+            <p class="muted">Load the extension as an unpacked Chrome extension, then use it on ChatGPT, Codex in ChatGPT, Claude, Gemini, or Google AI Studio pages.</p>
+          </div>
+
+          <div class="settings-block">
             <h3>File Types</h3>
             <p class="muted">Choose which file types each section should import while scanning folders.</p>
             <div id="fileTypeSettings" class="file-type-settings"></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div id="debugModal" class="modal hidden">
+      <div class="modal-backdrop" data-close-debug="true"></div>
+      <div class="modal-card modal-card-wide">
+        <div class="section-head">
+          <h2>Extension Debug Console</h2>
+          <div class="compact-actions">
+            <button id="refreshDebugLogsBtn" class="ghost-button">Refresh Logs</button>
+            <button id="testDebugAlertBtn" class="action-button">Test Alert</button>
+            <button id="copyDebugLogsBtn" class="ghost-button">Copy Logs</button>
+            <button id="exportDebugLogsBtn" class="ghost-button">Export Logs</button>
+            <button id="clearDebugLogsBtn" class="ghost-button danger">Clear Logs</button>
+            <button id="closeDebugModalBtn" class="ghost-button">Close</button>
+          </div>
+        </div>
+        <div class="debug-toolbar">
+          <label class="field">
+            <span>Latest Signal</span>
+            <input id="debugSummaryText" type="text" readonly placeholder="No debug events yet" />
+          </label>
+        </div>
+        <pre id="debugLogConsole" class="debug-console">No debug logs yet.</pre>
       </div>
     </div>
 

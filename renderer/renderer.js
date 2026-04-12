@@ -17,8 +17,9 @@ const state = {
   createdAt: null,
   prompts: [],
   settings: { exportDir: "", autoRefreshPreview: true, autoPullBeforeBuild: false, theme: "dark", sectionFileTypes: { backend: [], website: [], android: [] } },
-  meta: { availableFileTypes: [], defaultSectionFileTypes: {} },
-  library: { templates: [], systemInstructions: [] },
+  meta: { availableFileTypes: [], defaultSectionFileTypes: {}, builtInFileTypeSet: new Set(), browserBridgeUrl: "", browserExtensionPath: "" },
+  library: { browserCaptures: [], templates: [], systemInstructions: [] },
+  debugLogs: [],
   attachedSystemInstructionIds: [],
   collapsedNodes: Object.fromEntries(KEYS.map((k) => [k, []])),
   sections: Object.fromEntries(KEYS.map((k) => [k, { roots: [], excludedPaths: [], preview: null, gitLog: "No Git action yet." }]))
@@ -35,14 +36,19 @@ const els = {
   systemInstructionSelectMain: id("systemInstructionSelectMain"), saveSystemInstructionBtnMain: id("saveSystemInstructionBtnMain"),
   loadSystemInstructionBtn: id("loadSystemInstructionBtn"), attachSystemInstructionBtnMain: id("attachSystemInstructionBtnMain"),
   deleteSystemInstructionBtnMain: id("deleteSystemInstructionBtnMain"), attachedSystemInstructionsMain: id("attachedSystemInstructionsMain"),
-  savedPromptList: id("savedPromptList"), searchInput: id("searchInput"),
+  savedPromptList: id("savedPromptList"), browserCaptureList: id("browserCaptureList"), refreshBrowserCapturesBtn: id("refreshBrowserCapturesBtn"), searchInput: id("searchInput"),
   buildBtn: id("buildBtn"), refreshAllBtn: id("refreshAllBtn"), pullAllBtn: id("pullAllBtn"), copyBtn: id("copyBtn"),
-  saveBtn: id("saveBtn"), deleteBtn: id("deleteBtn"), newPromptBtn: id("newPromptBtn"), toggleSidebarBtn: id("toggleSidebarBtn"),
+  duplicateBtn: id("duplicateBtn"), saveBtn: id("saveBtn"), deleteBtn: id("deleteBtn"), newPromptBtn: id("newPromptBtn"), toggleSidebarBtn: id("toggleSidebarBtn"),
   themeToggleBtn: id("themeToggleBtn"), settingsBtn: id("settingsBtn"), closeSettingsBtn: id("closeSettingsBtn"),
   settingsModal: id("settingsModal"), chooseExportBtn: id("chooseExportBtn"), resetExportBtn: id("resetExportBtn"),
   chooseBackupBtn: id("chooseBackupBtn"), resetBackupBtn: id("resetBackupBtn"),
   autoRefreshToggle: id("autoRefreshToggle"), autoPullToggle: id("autoPullToggle"), backupNowBtn: id("backupNowBtn"),
   restoreBackupBtn: id("restoreBackupBtn"), backupStatusText: id("backupStatusText"), backupFolderText: id("backupFolderText"), storageText: id("storageText"),
+  browserBridgeEnabled: id("browserBridgeEnabled"), browserBridgePort: id("browserBridgePort"), browserBridgeText: id("browserBridgeText"),
+  browserExtensionPathText: id("browserExtensionPathText"), saveBrowserBridgeBtn: id("saveBrowserBridgeBtn"), openExtensionFolderBtn: id("openExtensionFolderBtn"),
+  openDebugConsoleBtn: id("openDebugConsoleBtn"), debugModal: id("debugModal"), closeDebugModalBtn: id("closeDebugModalBtn"),
+  refreshDebugLogsBtn: id("refreshDebugLogsBtn"), clearDebugLogsBtn: id("clearDebugLogsBtn"), copyDebugLogsBtn: id("copyDebugLogsBtn"),
+  exportDebugLogsBtn: id("exportDebugLogsBtn"), testDebugAlertBtn: id("testDebugAlertBtn"), debugSummaryText: id("debugSummaryText"), debugLogConsole: id("debugLogConsole"),
   fileTypeSettings: id("fileTypeSettings"), promptPreview: id("promptPreview"), charCount: id("charCount"),
   wordCount: id("wordCount"), tokenCount: id("tokenCount"), statusBar: id("statusBar"),
   backendEnabled: id("backendEnabled"), websiteEnabled: id("websiteEnabled"), androidEnabled: id("androidEnabled")
@@ -59,6 +65,12 @@ const dropEl = (k) => id(`${k}DropZone`);
 const setStatus = (m) => { els.statusBar.textContent = m; };
 const section = (k) => state.sections[k];
 const item = (type, path) => ({ id: `${type}:${path}`, type, path });
+const normalizeExtension = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  return raw.startsWith(".") ? raw : `.${raw}`;
+};
+const isValidExtension = (value) => /^\.[a-z0-9][a-z0-9._-]*$/i.test(value);
 const config = () => ({
   instructions: { enabled: els.instructionsEnabled.checked, text: els.instructionsText.value },
   systemInstructions: { enabled: els.systemInstructionsEnabled.checked, text: els.systemInstructionsText.value, attachedIds: state.attachedSystemInstructionIds },
@@ -79,6 +91,82 @@ function renderStorage() {
   }
   els.autoRefreshToggle.checked = state.settings.autoRefreshPreview !== false;
   els.autoPullToggle.checked = !!state.settings.autoPullBeforeBuild;
+  if (els.browserBridgeEnabled) {
+    els.browserBridgeEnabled.checked = state.settings.browserBridge?.enabled !== false;
+  }
+  if (els.browserBridgePort) {
+    els.browserBridgePort.value = state.settings.browserBridge?.port || "";
+  }
+  if (els.browserBridgeText) {
+    els.browserBridgeText.textContent = `Local bridge URL: ${state.meta.browserBridgeUrl || "Not available"}`;
+  }
+  if (els.browserExtensionPathText) {
+    els.browserExtensionPathText.textContent = `Extension folder: ${state.meta.browserExtensionPath || "Not available"}`;
+  }
+}
+
+function formatDebugValue(value) {
+  if (value == null || value === "") {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function appendDebugLogEntry(entry, options = {}) {
+  if (!entry?.id) {
+    return;
+  }
+  if (state.debugLogs.some((item) => item.id === entry.id)) {
+    return;
+  }
+  if (options.toFront !== false) {
+    state.debugLogs.unshift(entry);
+  } else {
+    state.debugLogs.push(entry);
+  }
+  state.debugLogs = state.debugLogs.slice(0, 600);
+}
+
+function renderDebugConsole() {
+  if (!els.debugLogConsole) {
+    return;
+  }
+  if (!state.debugLogs.length) {
+    els.debugLogConsole.textContent = "No debug logs yet.";
+    if (els.debugSummaryText) {
+      els.debugSummaryText.value = "No debug events yet";
+    }
+    return;
+  }
+  const lines = state.debugLogs
+    .slice()
+    .reverse()
+    .map((entry) => {
+      const header = `[${new Date(entry.timestamp || Date.now()).toLocaleString()}] ${String(entry.level || "info").toUpperCase()} ${entry.source || "extension"} :: ${entry.event || "log"}`;
+      const siteLine = [entry.site, entry.url].filter(Boolean).join(" | ");
+      const messageLine = entry.message || "";
+      const detailText = formatDebugValue(entry.details);
+      return [header, siteLine, messageLine, detailText].filter(Boolean).join("\n");
+    });
+  els.debugLogConsole.textContent = lines.join("\n\n--------------------------------------------------\n\n");
+  const latest = state.debugLogs[0];
+  if (els.debugSummaryText) {
+    els.debugSummaryText.value = latest
+      ? `${latest.source || "extension"} • ${latest.event || "log"} • ${new Date(latest.timestamp || Date.now()).toLocaleTimeString()}`
+      : "No debug events yet";
+  }
+}
+
+async function refreshDebugLogs() {
+  state.debugLogs = await window.promptManagerApi.listExtensionDebugLogs();
+  renderDebugConsole();
 }
 
 async function refreshBackupStatus() {
@@ -139,7 +227,7 @@ function treeNode(k, node, depth = 0) {
   row.style.marginLeft = `${depth * 12}px`;
   const isRoot = section(k).roots.some((root) => root.path.toLowerCase() === node.path.toLowerCase());
   const collapsed = state.collapsedNodes[k].includes(node.path);
-  row.innerHTML = `<div class="tree-title">${node.children?.length ? `<button type="button" class="tree-toggle">${collapsed ? "+" : "-"}</button>` : `<span class="tree-toggle" style="opacity:.35;display:inline-grid;place-items:center">.</span>`}<span class="tree-badge">${isRoot ? "root" : node.type}</span><div class="tree-text"><strong>${node.name}</strong><p>${node.path}</p></div></div>`;
+  row.innerHTML = `<div class="tree-title">${node.children?.length ? `<button type="button" class="tree-toggle">${collapsed ? "+" : "-"}</button>` : `<span class="tree-toggle placeholder">.</span>`}<span class="tree-badge">${isRoot ? "root" : node.type}</span><div class="tree-text"><strong>${node.name}</strong><p>${node.path}</p></div></div>`;
   const btn = document.createElement("button");
   btn.className = "tree-action";
   btn.textContent = node.included ? "Exclude" : "Include";
@@ -168,6 +256,16 @@ function renderSectionTree(k) {
   if (!s.roots.length) { box.innerHTML = `<p class="tree-empty">Add a folder, subfolder, files, or a GitHub link to start building this section.</p>`; return; }
   if (!s.preview?.treeRoots?.length) { box.innerHTML = `<p class="tree-empty">Refresh preview to inspect folders and exclude individual files or subfolders.</p>`; return; }
   s.preview.treeRoots.forEach((node) => box.appendChild(treeNode(k, node)));
+}
+
+function collectFolderPaths(nodes = [], bucket = []) {
+  nodes.forEach((node) => {
+    if (node.type === "folder") {
+      bucket.push(node.path);
+    }
+    collectFolderPaths(node.children || [], bucket);
+  });
+  return bucket;
 }
 
 function renderTemplateSelect() {
@@ -214,6 +312,13 @@ function renderFileTypeSettings() {
     const group = document.createElement("div");
     group.className = "file-type-group";
     group.innerHTML = `<h3>${k[0].toUpperCase()}${k.slice(1)} File Types</h3>`;
+    const toolbar = document.createElement("div");
+    toolbar.className = "file-type-toolbar";
+    toolbar.innerHTML = `
+      <button type="button" class="ghost-button" data-filetype-tool="all" data-filetype-section="${k}">Select All</button>
+      <button type="button" class="ghost-button" data-filetype-tool="default" data-filetype-section="${k}">Use Defaults</button>
+      <span class="muted small-text">Built-in and custom extensions both work here.</span>
+    `;
     const grid = document.createElement("div");
     grid.className = "file-type-grid";
     const selected = new Set(state.settings.sectionFileTypes[k] || []);
@@ -223,7 +328,22 @@ function renderFileTypeSettings() {
       label.innerHTML = `<input type="checkbox" data-filetype-section="${k}" value="${ext}" ${selected.has(ext) ? "checked" : ""} /><span>${ext}</span>`;
       grid.appendChild(label);
     });
+    const customTypes = (state.settings.sectionFileTypes[k] || []).filter((ext) => !state.meta.builtInFileTypeSet.has(ext));
+    const customRow = document.createElement("div");
+    customRow.className = "custom-type-row";
+    customRow.innerHTML = `
+      <input type="text" class="inline-input" id="customExtInput-${k}" placeholder="Add custom extension like .jsx or .proto" />
+      <button type="button" class="action-button" data-custom-ext-add="${k}">Add Extension</button>
+    `;
+    const customList = document.createElement("div");
+    customList.className = "custom-type-list";
+    customList.innerHTML = customTypes.length
+      ? customTypes.map((ext) => `<span class="custom-type-chip">${ext}<button type="button" data-custom-ext-remove="${k}" data-extension="${ext}">x</button></span>`).join("")
+      : `<p class="muted">No custom extensions added for ${k}.</p>`;
+    group.appendChild(toolbar);
     group.appendChild(grid);
+    group.appendChild(customRow);
+    group.appendChild(customList);
     box.appendChild(group);
   });
   box.querySelectorAll("[data-filetype-section]").forEach((checkbox) => {
@@ -237,6 +357,54 @@ function renderFileTypeSettings() {
       renderStorage();
       renderFileTypeSettings();
       await autoRefreshAfterChange();
+    };
+  });
+  box.querySelectorAll("[data-filetype-tool]").forEach((button) => {
+    button.onclick = async () => {
+      const k = button.dataset.filetypeSection;
+      const next = { ...state.settings.sectionFileTypes };
+      const customTypes = (next[k] || []).filter((ext) => !state.meta.builtInFileTypeSet.has(ext));
+      if (button.dataset.filetypeTool === "all") {
+        next[k] = Array.from(new Set([...state.meta.availableFileTypes, ...customTypes])).sort();
+      } else {
+        next[k] = Array.from(new Set([...(state.meta.defaultSectionFileTypes[k] || []), ...customTypes])).sort();
+      }
+      state.settings = await window.promptManagerApi.updateSettings({ sectionFileTypes: next });
+      renderStorage();
+      renderFileTypeSettings();
+      await autoRefreshAfterChange();
+    };
+  });
+  box.querySelectorAll("[data-custom-ext-add]").forEach((button) => {
+    button.onclick = async () => {
+      const k = button.dataset.customExtAdd;
+      const input = id(`customExtInput-${k}`);
+      const extension = normalizeExtension(input.value);
+      if (!isValidExtension(extension)) {
+        setStatus(`Use a valid extension like .jsx, .tsx, .proto, or .conf for ${k}.`);
+        return;
+      }
+      const next = { ...state.settings.sectionFileTypes };
+      next[k] = Array.from(new Set([...(next[k] || []), extension])).sort();
+      state.settings = await window.promptManagerApi.updateSettings({ sectionFileTypes: next });
+      input.value = "";
+      renderStorage();
+      renderFileTypeSettings();
+      await autoRefreshAfterChange();
+      setStatus(`Added ${extension} to ${k} file types.`);
+    };
+  });
+  box.querySelectorAll("[data-custom-ext-remove]").forEach((button) => {
+    button.onclick = async () => {
+      const k = button.dataset.customExtRemove;
+      const extension = button.dataset.extension;
+      const next = { ...state.settings.sectionFileTypes };
+      next[k] = (next[k] || []).filter((ext) => ext !== extension);
+      state.settings = await window.promptManagerApi.updateSettings({ sectionFileTypes: next });
+      renderStorage();
+      renderFileTypeSettings();
+      await autoRefreshAfterChange();
+      setStatus(`Removed ${extension} from ${k} file types.`);
     };
   });
 }
@@ -272,6 +440,11 @@ function promptCardMarkup(prompt) {
   return `<strong>${prompt.name}</strong><p>${prompt.notes || "No notes yet."}</p><p class="muted">${tags || "No tags"} • ${new Date(prompt.updatedAt).toLocaleString()}</p>`;
 }
 
+function makeDuplicatePromptName(name) {
+  const trimmed = String(name || "").trim() || "Untitled Prompt";
+  return /\(copy(?: \d+)?\)$/i.test(trimmed) ? `${trimmed} copy` : `${trimmed} (Copy)`;
+}
+
 function renderPromptList() {
   const q = els.searchInput.value.trim().toLowerCase();
   els.savedPromptList.innerHTML = "";
@@ -280,11 +453,20 @@ function renderPromptList() {
   prompts.forEach((prompt) => {
     const card = document.createElement("div");
     card.className = `saved-item${state.currentPromptId === prompt.id ? " active" : ""}`;
-    card.innerHTML = `${promptCardMarkup(prompt)}<div class="compact-actions" style="margin-top:10px"><button type="button" class="action-button" data-load-id="${prompt.id}">Edit</button><button type="button" class="ghost-button danger" data-delete-id="${prompt.id}">Delete</button></div>`;
+    card.innerHTML = `${promptCardMarkup(prompt)}<div class="compact-actions" style="margin-top:10px"><button type="button" class="action-button" data-load-id="${prompt.id}">Edit</button><button type="button" class="ghost-button" data-duplicate-id="${prompt.id}">Duplicate</button><button type="button" class="ghost-button danger" data-delete-id="${prompt.id}">Delete</button></div>`;
     card.querySelector("[data-load-id]").onclick = async () => {
       const loaded = await window.promptManagerApi.loadPrompt(prompt.id);
       fillFormFromPrompt(loaded.prompt, loaded.livePreview);
       setStatus(`Loaded "${loaded.prompt.name}" with the latest files from disk.`);
+    };
+    card.querySelector("[data-duplicate-id]").onclick = async () => {
+      const loaded = await window.promptManagerApi.loadPrompt(prompt.id);
+      fillFormFromPrompt(loaded.prompt, loaded.livePreview);
+      state.currentPromptId = null;
+      state.createdAt = null;
+      els.promptName.value = makeDuplicatePromptName(loaded.prompt.name);
+      renderPromptList();
+      setStatus(`Prepared a duplicate of "${loaded.prompt.name}". Save it with the new name when ready.`);
     };
     card.querySelector("[data-delete-id]").onclick = async () => {
       const deleted = await window.promptManagerApi.deletePrompt(prompt.id);
@@ -295,6 +477,59 @@ function renderPromptList() {
       }
     };
     els.savedPromptList.appendChild(card);
+  });
+}
+
+function renderBrowserCaptures() {
+  const box = els.browserCaptureList;
+  box.innerHTML = "";
+  if (!state.library.browserCaptures.length) {
+    box.innerHTML = `<p class="muted">No browser captures yet. Use the Chrome extension on Gemini or AI Studio to save the current typed prompt.</p>`;
+    return;
+  }
+
+  state.library.browserCaptures.forEach((capture) => {
+    const card = document.createElement("div");
+    card.className = "saved-item";
+    const label = capture.site || "browser";
+    const usage = capture.stats?.estimatedTokens ? `${capture.stats.estimatedTokens.toLocaleString()} est. tokens` : "No usage";
+    card.innerHTML = `
+      <strong>${capture.title || "Browser prompt"}</strong>
+      <p>${capture.pageTitle || capture.sourceUrl || "Captured from browser"}</p>
+      <p class="muted">${label} • ${usage} • ${new Date(capture.updatedAt).toLocaleString()}</p>
+      <div class="compact-actions" style="margin-top:10px">
+        <button type="button" class="action-button" data-capture-use="${capture.id}">Use In Instructions</button>
+        <button type="button" class="ghost-button" data-capture-system="${capture.id}">Use In System</button>
+        <button type="button" class="ghost-button" data-capture-copy="${capture.id}">Copy</button>
+        <button type="button" class="ghost-button danger" data-capture-delete="${capture.id}">Delete</button>
+      </div>
+    `;
+    card.querySelector("[data-capture-use]").onclick = async () => {
+      els.instructionsEnabled.checked = true;
+      els.instructionsText.value = capture.text;
+      if (!els.promptName.value.trim()) {
+        els.promptName.value = capture.title || "Browser prompt";
+      }
+      await autoRefreshAfterChange();
+      setStatus(`Loaded browser capture "${capture.title}" into Instructions.`);
+    };
+    card.querySelector("[data-capture-copy]").onclick = async () => {
+      await navigator.clipboard.writeText(capture.text || "");
+      setStatus(`Copied browser capture "${capture.title}" to clipboard.`);
+    };
+    card.querySelector("[data-capture-system]").onclick = async () => {
+      els.systemInstructionsEnabled.checked = true;
+      els.systemInstructionsText.value = capture.text;
+      els.systemInstructionNameInput.value = capture.title || "Browser capture";
+      await autoRefreshAfterChange();
+      setStatus(`Loaded browser capture "${capture.title}" into System Instructions.`);
+    };
+    card.querySelector("[data-capture-delete]").onclick = async () => {
+      state.library.browserCaptures = await window.promptManagerApi.deleteBrowserCapture(capture.id);
+      renderBrowserCaptures();
+      setStatus(`Deleted browser capture "${capture.title}".`);
+    };
+    box.appendChild(card);
   });
 }
 
@@ -357,6 +592,7 @@ async function refreshLibraries() {
   state.library = await window.promptManagerApi.getLibrary();
   renderTemplateSelect();
   renderSystemInstructionLibrary();
+  renderBrowserCaptures();
 }
 
 function removeRoot(k, rootId) {
@@ -472,6 +708,21 @@ async function copyPrompt() {
   if (!els.promptPreview.value.trim()) await refreshPreview();
   await navigator.clipboard.writeText(els.promptPreview.value);
   setStatus("Prompt copied to clipboard.");
+}
+
+async function duplicateCurrentPrompt() {
+  if (!els.promptName.value.trim() && !state.currentPromptId) {
+    setStatus("Load or build a prompt first, then duplicate it.");
+    return;
+  }
+  if (!els.promptPreview.value.trim()) {
+    await refreshPreview({ skipAutoPull: true });
+  }
+  state.currentPromptId = null;
+  state.createdAt = null;
+  els.promptName.value = makeDuplicatePromptName(els.promptName.value);
+  renderPromptList();
+  setStatus("This prompt is now detached from the original. Save it as a new prompt when ready.");
 }
 
 async function savePrompt() {
@@ -607,10 +858,16 @@ function bindEvents() {
   els.deleteSystemInstructionBtnMain.onclick = deleteSelectedSystemInstruction;
   els.loadSystemInstructionBtn.onclick = loadSelectedSystemInstructionIntoEditor;
   els.searchInput.oninput = renderPromptList;
+  els.refreshBrowserCapturesBtn.onclick = async () => {
+    state.library.browserCaptures = await window.promptManagerApi.listBrowserCaptures();
+    renderBrowserCaptures();
+    setStatus("Browser inbox refreshed.");
+  };
   els.buildBtn.onclick = async () => { await refreshPreview(); };
   els.refreshAllBtn.onclick = async () => { await refreshPreview({ skipAutoPull: true }); };
   els.pullAllBtn.onclick = async () => { await pullAllSections(); await refreshPreview({ skipAutoPull: true }); };
   els.copyBtn.onclick = copyPrompt;
+  els.duplicateBtn.onclick = duplicateCurrentPrompt;
   els.saveBtn.onclick = savePrompt;
   els.deleteBtn.onclick = deletePrompt;
   els.newPromptBtn.onclick = resetForm;
@@ -627,10 +884,98 @@ function bindEvents() {
   els.settingsBtn.onclick = () => els.settingsModal.classList.remove("hidden");
   els.closeSettingsBtn.onclick = () => els.settingsModal.classList.add("hidden");
   document.querySelectorAll("[data-close-settings]").forEach((node) => { node.onclick = () => els.settingsModal.classList.add("hidden"); });
+  if (els.openDebugConsoleBtn) {
+    els.openDebugConsoleBtn.onclick = async () => {
+      els.debugModal.classList.remove("hidden");
+      await refreshDebugLogs();
+      setStatus("Extension debug console opened.");
+    };
+  }
+  if (els.closeDebugModalBtn) {
+    els.closeDebugModalBtn.onclick = () => els.debugModal.classList.add("hidden");
+  }
+  document.querySelectorAll("[data-close-debug]").forEach((node) => {
+    node.onclick = () => els.debugModal.classList.add("hidden");
+  });
+  if (els.refreshDebugLogsBtn) {
+    els.refreshDebugLogsBtn.onclick = async () => {
+      await refreshDebugLogs();
+      setStatus("Extension debug logs refreshed.");
+    };
+  }
+  if (els.clearDebugLogsBtn) {
+    els.clearDebugLogsBtn.onclick = async () => {
+      await window.promptManagerApi.clearExtensionDebugLogs();
+      state.debugLogs = [];
+      renderDebugConsole();
+      setStatus("Extension debug logs cleared.");
+    };
+  }
+  if (els.copyDebugLogsBtn) {
+    els.copyDebugLogsBtn.onclick = async () => {
+      await navigator.clipboard.writeText(els.debugLogConsole.textContent || "");
+      setStatus("Extension debug logs copied to clipboard.");
+    };
+  }
+  if (els.exportDebugLogsBtn) {
+    els.exportDebugLogsBtn.onclick = async () => {
+      const result = await window.promptManagerApi.exportExtensionDebugLogs();
+      setStatus(`Debug logs exported to ${result.filePath}.`);
+    };
+  }
+  if (els.testDebugAlertBtn) {
+    els.testDebugAlertBtn.onclick = async () => {
+      await window.promptManagerApi.testAlert();
+      await refreshDebugLogs();
+      setStatus("Manual alert test sent from Prompt Manager.");
+    };
+  }
+  document.querySelectorAll("[data-tree-section][data-tree-action]").forEach((button) => {
+    button.onclick = () => {
+      const k = button.dataset.treeSection;
+      const preview = state.sections[k].preview;
+      if (!preview?.treeRoots?.length) {
+        setStatus(`Build or refresh ${k} first so there is a folder tree to expand or collapse.`);
+        return;
+      }
+      if (button.dataset.treeAction === "collapse") {
+        state.collapsedNodes[k] = collectFolderPaths(preview.treeRoots);
+      } else {
+        state.collapsedNodes[k] = [];
+      }
+      renderSectionTree(k);
+    };
+  });
   els.chooseExportBtn.onclick = async () => { state.settings = await window.promptManagerApi.chooseExportDir(); renderStorage(); await refreshBackupStatus(); setStatus("Export folder updated."); };
   els.resetExportBtn.onclick = async () => { state.settings = await window.promptManagerApi.resetExportDir(); renderStorage(); await refreshBackupStatus(); setStatus("Export folder reset to default."); };
   els.chooseBackupBtn.onclick = async () => { state.settings = await window.promptManagerApi.chooseBackupDir(); renderStorage(); await refreshBackupStatus(); setStatus("Backup folder updated."); };
   els.resetBackupBtn.onclick = async () => { state.settings = await window.promptManagerApi.resetBackupDir(); renderStorage(); await refreshBackupStatus(); setStatus("Backup folder reset to default."); };
+  els.saveBrowserBridgeBtn.onclick = async () => {
+    const port = Number.parseInt(els.browserBridgePort.value, 10);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      setStatus("Browser bridge port must be between 1024 and 65535.");
+      return;
+    }
+    state.settings = await window.promptManagerApi.updateSettings({
+      browserBridge: {
+        enabled: els.browserBridgeEnabled.checked,
+        port
+      }
+    });
+    const meta = await window.promptManagerApi.getMeta();
+    state.meta.browserBridgeUrl = meta.browserBridgeUrl || "";
+    state.meta.browserExtensionPath = meta.browserExtensionPath || "";
+    renderStorage();
+    setStatus("Browser integration settings saved.");
+  };
+  els.openExtensionFolderBtn.onclick = async () => {
+    const result = await window.promptManagerApi.openPath(state.meta.browserExtensionPath);
+    if (!result.success) {
+      setStatus(`Could not open extension folder: ${result.error}`);
+      return;
+    }
+    setStatus("Opened the Chrome extension folder.");
+  };
   els.autoRefreshToggle.onchange = async () => { state.settings = await window.promptManagerApi.updateSettings({ autoRefreshPreview: els.autoRefreshToggle.checked }); renderStorage(); setStatus("Auto refresh setting updated."); };
   els.autoPullToggle.onchange = async () => { state.settings = await window.promptManagerApi.updateSettings({ autoPullBeforeBuild: els.autoPullToggle.checked }); renderStorage(); setStatus("Auto pull setting updated."); };
   els.backupNowBtn.onclick = async () => { const backup = await window.promptManagerApi.backupNow(); await refreshBackupStatus(); setStatus(`Backup saved to ${backup.backupPath}.`); };
@@ -638,6 +983,8 @@ function bindEvents() {
     await window.promptManagerApi.restoreBackup();
     const meta = await window.promptManagerApi.getMeta();
     state.settings = meta.settings;
+    state.meta.browserBridgeUrl = meta.browserBridgeUrl || "";
+    state.meta.browserExtensionPath = meta.browserExtensionPath || "";
     renderStorage();
     renderFileTypeSettings();
     applyTheme();
@@ -656,14 +1003,24 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  if (window.promptManagerApi.onExtensionDebugLog) {
+    window.promptManagerApi.onExtensionDebugLog((entry) => {
+      appendDebugLogEntry(entry);
+      renderDebugConsole();
+    });
+  }
   KEYS.forEach((k) => { renderSources(k); renderSectionTree(k); renderSectionMeta(k); });
   const meta = await window.promptManagerApi.getMeta();
   state.meta.availableFileTypes = meta.availableFileTypes || [];
   state.meta.defaultSectionFileTypes = meta.defaultSectionFileTypes || {};
+  state.meta.builtInFileTypeSet = new Set(meta.availableFileTypes || []);
+  state.meta.browserBridgeUrl = meta.browserBridgeUrl || "";
+  state.meta.browserExtensionPath = meta.browserExtensionPath || "";
   state.settings = meta.settings;
   renderStorage();
   renderFileTypeSettings();
   applyTheme();
+  await refreshDebugLogs();
   await refreshBackupStatus();
   await refreshLibraries();
   await refreshPromptList();

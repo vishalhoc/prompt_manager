@@ -1,12 +1,17 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { Notification, app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const fs = require("fs");
+const http = require("http");
 const path = require("path");
+const { URL } = require("url");
 const { execFile } = require("child_process");
 
 const APP_TITLE = "Prompt Manager";
 const DEFAULT_EXPORT_FOLDER_NAME = APP_TITLE.replace(/\s+/g, "");
 const BACKUP_FOLDER_NAME = "PromptManagerBackup";
 const BACKUP_FILE_NAME = "prompt-manager-backup.json";
+const BROWSER_EXTENSION_DIRNAME = "browser-extension";
+const DEFAULT_BROWSER_BRIDGE_PORT = 32123;
+const MAX_EXTENSION_DEBUG_LOGS = 600;
 const SECTION_LABELS = {
   backend: "BACKEND FILES",
   website: "WEBSITE FILES",
@@ -34,7 +39,6 @@ const AVAILABLE_FILE_TYPES = [
   ".swift",
   ".sql"
 ];
-const AVAILABLE_FILE_TYPE_SET = new Set(AVAILABLE_FILE_TYPES);
 const DEFAULT_SECTION_FILE_TYPES = {
   backend: [".py", ".js", ".ts", ".json", ".sql", ".md", ".txt", ".yml", ".yaml", ".properties"],
   website: [".html", ".css", ".js", ".ts", ".json", ".md", ".txt", ".yml", ".yaml"],
@@ -56,6 +60,8 @@ const IGNORED_DIRS = new Set([
 ]);
 
 let mainWindow;
+let browserBridgeServer;
+let extensionDebugLogs = [];
 
 function slugify(value) {
   return value
@@ -73,8 +79,73 @@ function estimateTokens(text) {
   return Math.max(1, Math.ceil((text || "").length / 4));
 }
 
+function sanitizeDebugDetails(value, depth = 0) {
+  if (value == null) {
+    return value;
+  }
+  if (depth > 3) {
+    return "[Max depth]";
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((entry) => sanitizeDebugDetails(entry, depth + 1));
+  }
+  if (typeof value === "object") {
+    const result = {};
+    for (const [key, entry] of Object.entries(value).slice(0, 40)) {
+      result[key] = sanitizeDebugDetails(entry, depth + 1);
+    }
+    return result;
+  }
+  if (typeof value === "string") {
+    return value.length > 2000 ? `${value.slice(0, 2000)}...[truncated]` : value;
+  }
+  return value;
+}
+
+function pushExtensionDebugLog(input = {}) {
+  const entry = {
+    id: input.id || `debug-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: input.timestamp || new Date().toISOString(),
+    level: input.level || "info",
+    source: input.source || "app",
+    event: input.event || "log",
+    site: input.site || "",
+    url: input.url || "",
+    details: sanitizeDebugDetails(input.details || {}),
+    message: input.message || ""
+  };
+  extensionDebugLogs.unshift(entry);
+  if (extensionDebugLogs.length > MAX_EXTENSION_DEBUG_LOGS) {
+    extensionDebugLogs = extensionDebugLogs.slice(0, MAX_EXTENSION_DEBUG_LOGS);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("extension-debug:append", entry);
+  }
+  return entry;
+}
+
+function listExtensionDebugLogs() {
+  return extensionDebugLogs.slice();
+}
+
+function clearExtensionDebugLogs() {
+  extensionDebugLogs = [];
+}
+
 function normalizePath(targetPath) {
   return path.normalize(targetPath);
+}
+
+function normalizeExtension(extension) {
+  const value = String(extension || "").trim().toLowerCase();
+  if (!value) {
+    return "";
+  }
+  return value.startsWith(".") ? value : `.${value}`;
+}
+
+function isValidExtension(extension) {
+  return /^\.[a-z0-9][a-z0-9._-]*$/i.test(extension);
 }
 
 function uniqueNormalizedPaths(paths = []) {
@@ -97,6 +168,7 @@ function uniqueNormalizedPaths(paths = []) {
 function defaultPromptDb() {
   return {
     prompts: [],
+    browserCaptures: [],
     systemInstructions: [],
     templates: []
   };
@@ -110,6 +182,10 @@ function defaultSettings() {
     autoRefreshPreview: true,
     autoPullBeforeBuild: false,
     theme: "dark",
+    browserBridge: {
+      enabled: true,
+      port: DEFAULT_BROWSER_BRIDGE_PORT
+    },
     sectionFileTypes: { ...DEFAULT_SECTION_FILE_TYPES }
   };
 }
@@ -150,7 +226,9 @@ function normalizeSectionFileTypes(sectionFileTypes = {}) {
   const next = {};
   for (const sectionKey of Object.keys(SECTION_LABELS)) {
     const requested = Array.isArray(sectionFileTypes[sectionKey]) ? sectionFileTypes[sectionKey] : DEFAULT_SECTION_FILE_TYPES[sectionKey];
-    const filtered = requested.filter((extension) => AVAILABLE_FILE_TYPE_SET.has(extension));
+    const filtered = requested
+      .map(normalizeExtension)
+      .filter((extension) => isValidExtension(extension));
     next[sectionKey] = filtered.length ? Array.from(new Set(filtered)) : DEFAULT_SECTION_FILE_TYPES[sectionKey];
   }
   return next;
@@ -168,11 +246,44 @@ function normalizeLibraryItems(items = []) {
     }));
 }
 
+function normalizeBrowserCaptureItems(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && item.text)
+    .map((item) => {
+      const text = String(item.text || "");
+      const timestamp = item.updatedAt || new Date().toISOString();
+      return {
+        id: item.id || `capture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title: String(item.title || item.pageTitle || "Browser prompt").trim() || "Browser prompt",
+        pageTitle: String(item.pageTitle || item.title || "").trim(),
+        site: String(item.site || "browser").trim() || "browser",
+        sourceUrl: String(item.sourceUrl || "").trim(),
+        text,
+        stats: item.stats || {
+          characters: text.length,
+          words: text.trim() ? text.trim().split(/\s+/).length : 0,
+          estimatedTokens: estimateTokens(text)
+        },
+        createdAt: item.createdAt || timestamp,
+        updatedAt: timestamp
+      };
+    });
+}
+
 function normalizePromptDbData(data = {}) {
   return {
     prompts: Array.isArray(data.prompts) ? data.prompts : [],
+    browserCaptures: normalizeBrowserCaptureItems(data.browserCaptures),
     systemInstructions: normalizeLibraryItems(data.systemInstructions),
     templates: normalizeLibraryItems(data.templates)
+  };
+}
+
+function normalizeBrowserBridgeSettings(data = {}) {
+  const port = Number.parseInt(data.port, 10);
+  return {
+    enabled: data.enabled !== false,
+    port: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_BROWSER_BRIDGE_PORT
   };
 }
 
@@ -184,6 +295,7 @@ function normalizeSettingsData(data = {}) {
     autoRefreshPreview: data.autoRefreshPreview !== false,
     autoPullBeforeBuild: Boolean(data.autoPullBeforeBuild),
     theme: data.theme === "light" ? "light" : "dark",
+    browserBridge: normalizeBrowserBridgeSettings(data.browserBridge || defaults.browserBridge),
     sectionFileTypes: normalizeSectionFileTypes(data.sectionFileTypes || defaults.sectionFileTypes)
   };
 }
@@ -214,12 +326,17 @@ function restoreBackupIfNeeded() {
   const currentDb = normalizePromptDbData(JSON.parse(fs.readFileSync(promptsDbPath, "utf8")));
   const latestSettings = normalizeSettingsData(JSON.parse(fs.readFileSync(settingsPath, "utf8")));
 
-  const shouldRestoreDb = currentDb.prompts.length === 0 && currentDb.systemInstructions.length === 0 && currentDb.templates.length === 0;
+  const shouldRestoreDb =
+    currentDb.prompts.length === 0 &&
+    currentDb.browserCaptures.length === 0 &&
+    currentDb.systemInstructions.length === 0 &&
+    currentDb.templates.length === 0;
   const defaults = defaultSettings();
   const shouldRestoreSettings =
     latestSettings.exportDir === defaults.exportDir &&
     latestSettings.backupDir === defaults.backupDir &&
     latestSettings.theme === defaults.theme &&
+    JSON.stringify(latestSettings.browserBridge) === JSON.stringify(defaults.browserBridge) &&
     JSON.stringify(latestSettings.sectionFileTypes) === JSON.stringify(defaults.sectionFileTypes);
 
   if (shouldRestoreDb) {
@@ -645,6 +762,17 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
+function getBrowserExtensionPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "app.asar.unpacked", BROWSER_EXTENSION_DIRNAME);
+  }
+  return path.join(__dirname, BROWSER_EXTENSION_DIRNAME);
+}
+
+function getBrowserBridgeUrl(settings = readSettings()) {
+  return `http://127.0.0.1:${settings.browserBridge.port}`;
+}
+
 function mapPromptSummary(prompt) {
   return {
     id: prompt.id,
@@ -654,6 +782,377 @@ function mapPromptSummary(prompt) {
     updatedAt: prompt.updatedAt,
     exportFileName: prompt.exportFileName || ""
   };
+}
+
+function mapBrowserCaptureSummary(capture) {
+  return {
+    id: capture.id,
+    title: capture.title,
+    pageTitle: capture.pageTitle || "",
+    site: capture.site || "browser",
+    sourceUrl: capture.sourceUrl || "",
+    updatedAt: capture.updatedAt,
+    stats: capture.stats || {
+      characters: 0,
+      words: 0,
+      estimatedTokens: 0
+    }
+  };
+}
+
+async function refreshPromptForBrowser(record, options = {}) {
+  const config = normalizePromptConfig(record.config);
+  const gitResults = [];
+
+  if (options.pullGit) {
+    for (const sectionKey of Object.keys(SECTION_LABELS)) {
+      const sectionConfig = config[sectionKey];
+      if (!sectionConfig?.enabled) {
+        continue;
+      }
+      const repoList = Array.from(new Set(
+        normalizeSection(sectionConfig).roots
+          .map((root) => detectGitRoot(root.path))
+          .filter(Boolean)
+      )).sort();
+      for (const repoPath of repoList) {
+        gitResults.push(await execGitPull(repoPath));
+      }
+    }
+  }
+
+  const preview = buildPromptPayload(config);
+  return {
+    prompt: preview.prompt,
+    stats: preview.stats,
+    gitResults
+  };
+}
+
+function upsertBrowserCapture(collection, input = {}) {
+  const text = String(input.text || "");
+  if (!text.trim()) {
+    throw new Error("Capture text is required.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const record = {
+    id: input.id || `capture-${Date.now()}`,
+    title: String(input.title || input.pageTitle || "Browser prompt").trim() || "Browser prompt",
+    pageTitle: String(input.pageTitle || input.title || "").trim(),
+    site: String(input.site || "browser").trim() || "browser",
+    sourceUrl: String(input.sourceUrl || "").trim(),
+    text,
+    stats: {
+      characters: text.length,
+      words: text.trim() ? text.trim().split(/\s+/).length : 0,
+      estimatedTokens: estimateTokens(text)
+    },
+    updatedAt: timestamp,
+    createdAt: input.createdAt || timestamp
+  };
+
+  const existingIndex = collection.findIndex((entry) => entry.id === record.id);
+  if (existingIndex >= 0) {
+    record.createdAt = collection[existingIndex].createdAt;
+    collection[existingIndex] = record;
+  } else {
+    collection.unshift(record);
+  }
+  return record;
+}
+
+function jsonResponse(response, statusCode, payload) {
+  response.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    request.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {
+        reject(new Error("Request body too large."));
+        request.destroy();
+      }
+    });
+    request.on("end", () => {
+      if (!raw) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(new Error("Invalid JSON body."));
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function playNativeAlertBurst() {
+  pushExtensionDebugLog({
+    source: "desktop",
+    event: "play-native-alert-start",
+    details: {
+      platform: process.platform,
+      notificationSupported: Notification.isSupported()
+    }
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.flashFrame(true);
+      pushExtensionDebugLog({
+        source: "desktop",
+        event: "flash-frame-started"
+      });
+      setTimeout(() => {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.flashFrame(false);
+          }
+        } catch {
+        }
+      }, 5000);
+    } catch {
+    }
+  }
+
+  try {
+    if (Notification.isSupported()) {
+      const notification = new Notification({
+        title: APP_TITLE,
+        body: "AI response finished in the browser.",
+        silent: false
+      });
+      notification.show();
+      pushExtensionDebugLog({
+        source: "desktop",
+        event: "notification-shown"
+      });
+    }
+  } catch (error) {
+    pushExtensionDebugLog({
+      source: "desktop",
+      level: "error",
+      event: "notification-failed",
+      details: { error: error.message }
+    });
+  }
+
+  try {
+    shell.beep();
+    pushExtensionDebugLog({
+      source: "desktop",
+      event: "shell-beep-invoked"
+    });
+  } catch (error) {
+    pushExtensionDebugLog({
+      source: "desktop",
+      level: "error",
+      event: "shell-beep-failed",
+      details: { error: error.message }
+    });
+  }
+
+  if (process.platform === "win32") {
+    const script = [
+      "$ErrorActionPreference='SilentlyContinue';",
+      "try { Add-Type -AssemblyName System.Windows.Forms; } catch {}",
+      "try { [System.Media.SystemSounds]::Exclamation.Play(); Start-Sleep -Milliseconds 220; [System.Media.SystemSounds]::Asterisk.Play(); } catch {}",
+      "try { Add-Type -AssemblyName System.Speech; $speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speaker.Volume = 100; $speaker.Rate = 1; $speaker.Speak('Prompt Manager alert. AI response finished.'); } catch {}"
+    ].join(" ");
+    execFile("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      script
+    ], { windowsHide: true }, (error, stdout, stderr) => {
+      pushExtensionDebugLog({
+        source: "desktop",
+        level: error ? "error" : "info",
+        event: error ? "powershell-alert-failed" : "powershell-alert-finished",
+        details: {
+          error: error ? error.message : "",
+          stdout: (stdout || "").trim(),
+          stderr: (stderr || "").trim()
+        }
+      });
+    });
+  }
+}
+
+async function handleBrowserBridgeRequest(request, response) {
+  if (!request.url) {
+    jsonResponse(response, 400, { error: "Missing URL." });
+    return;
+  }
+
+  if (request.method === "OPTIONS") {
+    jsonResponse(response, 204, {});
+    return;
+  }
+
+  const settings = readSettings(false);
+  if (!settings.browserBridge.enabled) {
+    jsonResponse(response, 503, { error: "Browser bridge is disabled." });
+    return;
+  }
+
+  const parsedUrl = new URL(request.url, getBrowserBridgeUrl(settings));
+  const pathname = parsedUrl.pathname;
+
+  try {
+    if (request.method === "GET" && pathname === "/health") {
+      jsonResponse(response, 200, {
+        ok: true,
+        app: APP_TITLE,
+        bridgeUrl: getBrowserBridgeUrl(settings),
+        debugLogCount: extensionDebugLogs.length
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/alert") {
+      const body = await readJsonBody(request);
+      pushExtensionDebugLog({
+        source: body.source || "extension",
+        site: body.site || "",
+        url: body.url || "",
+        event: "native-alert-requested",
+        details: body
+      });
+      playNativeAlertBurst();
+      jsonResponse(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/debug/logs") {
+      jsonResponse(response, 200, {
+        logs: listExtensionDebugLogs()
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/debug/log") {
+      const body = await readJsonBody(request);
+      const entry = pushExtensionDebugLog({
+        source: body.source || "extension",
+        level: body.level || "info",
+        site: body.site || "",
+        url: body.url || "",
+        event: body.event || "log",
+        details: body.details || {},
+        message: body.message || ""
+      });
+      jsonResponse(response, 200, { ok: true, entry });
+      return;
+    }
+
+    if (request.method === "DELETE" && pathname === "/debug/logs") {
+      clearExtensionDebugLogs();
+      jsonResponse(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/prompts") {
+      const db = readPromptDb(false);
+      jsonResponse(response, 200, {
+        prompts: db.prompts
+          .slice()
+          .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+          .map(mapPromptSummary)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname.startsWith("/prompts/")) {
+      const promptId = decodeURIComponent(pathname.replace("/prompts/", ""));
+      const db = readPromptDb(false);
+      const prompt = db.prompts.find((entry) => entry.id === promptId);
+      if (!prompt) {
+        jsonResponse(response, 404, { error: "Prompt not found." });
+        return;
+      }
+      const refresh = parsedUrl.searchParams.get("refresh") === "1";
+      const pullGit = parsedUrl.searchParams.get("git") === "1";
+      const preview = refresh || pullGit
+        ? await refreshPromptForBrowser(prompt, { pullGit })
+        : { ...buildPromptPayload(prompt.config), gitResults: [] };
+      jsonResponse(response, 200, {
+        id: prompt.id,
+        name: prompt.name,
+        prompt: preview.prompt,
+        stats: preview.stats,
+        gitResults: preview.gitResults || []
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/captures") {
+      const db = readPromptDb(false);
+      jsonResponse(response, 200, {
+        captures: db.browserCaptures
+          .slice()
+          .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+          .map(mapBrowserCaptureSummary)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/captures") {
+      const body = await readJsonBody(request);
+      const db = readPromptDb(false);
+      const capture = upsertBrowserCapture(db.browserCaptures, body);
+      writePromptDb(db);
+      jsonResponse(response, 200, { capture: mapBrowserCaptureSummary(capture) });
+      return;
+    }
+
+    if (request.method === "DELETE" && pathname.startsWith("/captures/")) {
+      const captureId = decodeURIComponent(pathname.replace("/captures/", ""));
+      const db = readPromptDb(false);
+      db.browserCaptures = db.browserCaptures.filter((entry) => entry.id !== captureId);
+      writePromptDb(db);
+      jsonResponse(response, 200, { deleted: true });
+      return;
+    }
+
+    jsonResponse(response, 404, { error: "Route not found." });
+  } catch (error) {
+    jsonResponse(response, 500, { error: error.message || "Unexpected bridge error." });
+  }
+}
+
+function restartBrowserBridge() {
+  const settings = readSettings(false);
+  if (browserBridgeServer) {
+    browserBridgeServer.close();
+    browserBridgeServer = null;
+  }
+
+  if (!settings.browserBridge.enabled) {
+    return;
+  }
+
+  browserBridgeServer = http.createServer((request, response) => {
+    handleBrowserBridgeRequest(request, response);
+  });
+
+  browserBridgeServer.on("error", (error) => {
+    console.error("Browser bridge error:", error.message);
+  });
+
+  browserBridgeServer.listen(settings.browserBridge.port, "127.0.0.1");
 }
 
 function execGit(args, options = {}) {
@@ -757,10 +1256,16 @@ ipcMain.handle("dialog:pick-files", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: "Select Files",
     properties: ["openFile", "multiSelections"],
-    filters: [{
-      name: "Code and text files",
-      extensions: AVAILABLE_FILE_TYPES.map((extension) => extension.slice(1))
-    }]
+    filters: [
+      {
+        name: "Code and text files",
+        extensions: AVAILABLE_FILE_TYPES.map((extension) => extension.slice(1))
+      },
+      {
+        name: "All files",
+        extensions: ["*"]
+      }
+    ]
   });
 
   return result.canceled ? [] : result.filePaths;
@@ -801,7 +1306,15 @@ ipcMain.handle("settings:get", () => readSettings());
 
 ipcMain.handle("settings:update", (_event, partialSettings = {}) => {
   const current = readSettings();
-  return writeSettings({ ...current, ...partialSettings });
+  const updated = writeSettings({
+    ...current,
+    ...partialSettings,
+    browserBridge: partialSettings.browserBridge
+      ? { ...current.browserBridge, ...partialSettings.browserBridge }
+      : current.browserBridge
+  });
+  restartBrowserBridge();
+  return updated;
 });
 
 ipcMain.handle("settings:choose-export-dir", async () => {
@@ -860,18 +1373,21 @@ ipcMain.handle("backup:status", () => {
 
 ipcMain.handle("backup:now", () => {
   syncBackup();
-  const { backupPath } = getStorePaths();
+  const { backupPath } = getBackupPathForSettings(readSettings(false));
   return { backupPath };
 });
 
 ipcMain.handle("backup:restore", () => {
   ensureStore();
   forceRestoreFromBackup();
+  restartBrowserBridge();
+  const db = readPromptDb();
   return {
     settings: readSettings(),
     library: {
-      systemInstructions: readPromptDb().systemInstructions,
-      templates: readPromptDb().templates
+      browserCaptures: db.browserCaptures,
+      systemInstructions: db.systemInstructions,
+      templates: db.templates
     }
   };
 });
@@ -879,9 +1395,22 @@ ipcMain.handle("backup:restore", () => {
 ipcMain.handle("library:bootstrap", () => {
   const db = readPromptDb();
   return {
+    browserCaptures: db.browserCaptures.slice().sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)),
     systemInstructions: db.systemInstructions,
     templates: db.templates
   };
+});
+
+ipcMain.handle("browser:capture-list", () => {
+  const db = readPromptDb();
+  return db.browserCaptures.slice().sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+});
+
+ipcMain.handle("browser:capture-delete", (_event, captureId) => {
+  const db = readPromptDb();
+  db.browserCaptures = db.browserCaptures.filter((entry) => entry.id !== captureId);
+  writePromptDb(db);
+  return db.browserCaptures.slice().sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 });
 
 ipcMain.handle("library:save-system-instruction", (_event, itemInput) => {
@@ -1032,13 +1561,63 @@ ipcMain.handle("app:meta", () => {
     promptsDbPath,
     backupPath: backup.backupPath,
     settings: readSettings(),
+    browserBridgeUrl: getBrowserBridgeUrl(settings),
+    browserExtensionPath: getBrowserExtensionPath(),
     availableFileTypes: AVAILABLE_FILE_TYPES,
     defaultSectionFileTypes: DEFAULT_SECTION_FILE_TYPES
   };
 });
 
+ipcMain.handle("debug:list-extension-logs", () => listExtensionDebugLogs());
+
+ipcMain.handle("debug:clear-extension-logs", () => {
+  clearExtensionDebugLogs();
+  return { cleared: true };
+});
+
+ipcMain.handle("debug:test-alert", () => {
+  pushExtensionDebugLog({
+    source: "app",
+    event: "manual-test-alert-requested"
+  });
+  playNativeAlertBurst();
+  return { ok: true };
+});
+
+ipcMain.handle("debug:export-extension-logs", () => {
+  const exportDir = getExportDir();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filePath = path.join(exportDir, `prompt-manager-debug-${timestamp}.txt`);
+  const lines = listExtensionDebugLogs()
+    .slice()
+    .reverse()
+    .map((entry) => {
+      const header = `[${new Date(entry.timestamp || Date.now()).toLocaleString()}] ${String(entry.level || "info").toUpperCase()} ${entry.source || "extension"} :: ${entry.event || "log"}`;
+      const siteLine = [entry.site, entry.url].filter(Boolean).join(" | ");
+      const messageLine = entry.message || "";
+      let detailText = "";
+      try {
+        detailText = entry.details ? JSON.stringify(entry.details, null, 2) : "";
+      } catch {
+        detailText = String(entry.details || "");
+      }
+      return [header, siteLine, messageLine, detailText].filter(Boolean).join("\n");
+    });
+  fs.writeFileSync(filePath, lines.join("\n\n--------------------------------------------------\n\n"), "utf8");
+  return { filePath };
+});
+
+ipcMain.handle("path:open", async (_event, targetPath) => {
+  if (!targetPath) {
+    return { success: false, error: "No path provided." };
+  }
+  const error = await shell.openPath(targetPath);
+  return { success: !error, error: error || null };
+});
+
 app.whenReady().then(() => {
   ensureStore();
+  restartBrowserBridge();
   createWindow();
 
   app.on("activate", () => {
@@ -1049,6 +1628,10 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  if (browserBridgeServer) {
+    browserBridgeServer.close();
+    browserBridgeServer = null;
+  }
   if (process.platform !== "darwin") {
     app.quit();
   }

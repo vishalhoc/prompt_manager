@@ -1,0 +1,106 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  background: #0b1220;
+  color: #edf3ff;
+}
+
+.popup-shell {
+  width: 360px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.panel {
+  padding: 14px;
+  border-radius: 16px;
+  background: #121a2b;
+  border: 1px solid rgba(145, 174, 215, 0.15);
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #8ca4c7;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 20px;
+  margin-bottom: 6px;
+}
+
+h2 {
+  font-size: 15px;
+}
+
+.muted {
+  color: #9eb0cb;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.section-head,
+.button-row,
+.check-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-head {
+  margin-bottom: 10px;
+}
+
+.button-row {
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.field-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(145, 174, 215, 0.16);
+  background: #0d1524;
+  color: #edf3ff;
+}
+
+.primary-button,
+.ghost-button {
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.primary-button {
+  border: 0;
+  background: #53d7ac;
+  color: #062116;
+}
+
+.ghost-button {
+  border: 1px solid rgba(145, 174, 215, 0.15);
+  background: transparent;
+  color: #edf3ff;
+}
+
+.check-row {
+  justify-content: flex-start;
+  margin-top: 4px;
+}

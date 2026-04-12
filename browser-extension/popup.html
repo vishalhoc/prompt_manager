@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prompt Manager</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <section class="panel">
+        <p class="eyebrow">Prompt Manager</p>
+        <h1>Browser Companion</h1>
+        <p id="statusText" class="muted">Checking current tab...</p>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Current Page</h2>
+          <button id="refreshPageBtn" type="button" class="ghost-button">Refresh</button>
+        </div>
+        <p id="siteText" class="muted">No page detected yet.</p>
+        <p id="pageStateText" class="muted">Page state will appear here.</p>
+        <p id="draftStatsText" class="muted">Draft usage will appear here.</p>
+        <p id="responseStatsText" class="muted">Latest response usage will appear here.</p>
+        <div class="button-row">
+          <button id="saveDraftBtn" type="button" class="primary-button">Save Current Typed Prompt</button>
+          <button id="saveResponseBtn" type="button" class="ghost-button">Save Response</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Saved Prompts</h2>
+          <button id="refreshPromptsBtn" type="button" class="ghost-button">Reload</button>
+        </div>
+        <input id="promptSearchInput" class="field-input" type="search" placeholder="Search saved prompts" />
+        <select id="promptSelect" class="field-input">
+          <option value="">Choose a saved prompt</option>
+        </select>
+        <p id="promptStatsText" class="muted">Saved prompt usage will appear here.</p>
+        <div class="button-row">
+          <button id="pastePromptBtn" type="button" class="primary-button">Paste Selected Prompt</button>
+          <button id="pasteSendPromptBtn" type="button" class="ghost-button">Paste + Send</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Options</h2>
+        <input id="bridgeUrlInput" class="field-input" type="text" placeholder="http://127.0.0.1:32123" />
+        <div class="button-row">
+          <button id="testSoundBtn" type="button" class="ghost-button">Test Sound</button>
+        </div>
+        <label class="check-row">
+          <input id="refreshBeforePasteToggle" type="checkbox" />
+          <span>Refresh prompt from latest files before paste</span>
+        </label>
+        <label class="check-row">
+          <input id="gitBeforePasteToggle" type="checkbox" />
+          <span>Run Git pull before refresh and paste</span>
+        </label>
+        <label class="check-row">
+          <input id="autoSendToggle" type="checkbox" />
+          <span>Use Paste + Send as the quick action</span>
+        </label>
+        <label class="check-row">
+          <input id="soundAlertToggle" type="checkbox" />
+          <span>Play a louder sound when AI response seems finished</span>
+        </label>
+        <label class="check-row">
+          <input id="floatingPanelToggle" type="checkbox" />
+          <span>Show on-page Prompt Manager panel</span>
+        </label>
+        <p id="bridgeText" class="muted">Bridge: not connected</p>
+      </section>
+
+      <section id="aiStudioToolsPanel" class="panel" hidden>
+        <div class="section-head">
+          <h2>AI Studio Tools</h2>
+        </div>
+        <p id="aiStudioStateText" class="muted">Available when the current tab is a Google AI Studio prompt page.</p>
+        <div class="button-row">
+          <button id="focusPromptBtn" type="button" class="primary-button">Focus Prompt</button>
+          <button id="runSettingsBtn" type="button" class="ghost-button">Run Settings</button>
+        </div>
+        <div class="button-row">
+          <button id="toggleStreamBtn" type="button" class="ghost-button">Toggle Stream</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="./popup.js"></script>
+  </body>
+</html>
